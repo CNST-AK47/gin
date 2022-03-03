@@ -15,6 +15,7 @@ import (
 )
 
 // JSON contains the given interface object.
+// 指定对象json
 type JSON struct {
 	Data interface{}
 }
@@ -62,6 +63,7 @@ func (r JSON) Render(w http.ResponseWriter) (err error) {
 
 // WriteContentType (JSON) writes JSON ContentType.
 func (r JSON) WriteContentType(w http.ResponseWriter) {
+	// 写入content类型
 	writeContentType(w, jsonContentType)
 }
 
@@ -79,6 +81,7 @@ func WriteJSON(w http.ResponseWriter, obj interface{}) error {
 // Render (IndentedJSON) marshals the given interface object and writes it with custom ContentType.
 func (r IndentedJSON) Render(w http.ResponseWriter) error {
 	r.WriteContentType(w)
+	// 对数据进行解析
 	jsonBytes, err := json.MarshalIndent(r.Data, "", "    ")
 	if err != nil {
 		return err

@@ -40,22 +40,28 @@ func MapFormWithTag(ptr interface{}, form map[string][]string, tag string) error
 
 var emptyField = reflect.StructField{}
 
+// 将from中的内容转变为ptr指针，根据tag进行反向对象解析
 func mapFormByTag(ptr interface{}, form map[string][]string, tag string) error {
 	// Check if ptr is a map
 	ptrVal := reflect.ValueOf(ptr)
+	// 指向目标数据的指针
 	var pointed interface{}
+	// 查询对应类型
 	if ptrVal.Kind() == reflect.Ptr {
 		ptrVal = ptrVal.Elem()
 		pointed = ptrVal.Interface()
 	}
+	// 查询对应类型为map，就直接进行映射
 	if ptrVal.Kind() == reflect.Map &&
 		ptrVal.Type().Key().Kind() == reflect.String {
+		// 检查指针指向地址是否为空
 		if pointed != nil {
 			ptr = pointed
 		}
+		// 设置formMap
 		return setFormMap(ptr, form)
 	}
-
+	// 非map类型，需要单独进行处理
 	return mappingByPtr(ptr, formSource(form), tag)
 }
 
@@ -376,25 +382,30 @@ func head(str, sep string) (head string, tail string) {
 	return str[:idx], str[idx+len(sep):]
 }
 
+// 将值映射到map上
 func setFormMap(ptr interface{}, form map[string][]string) error {
+	// 反射获取元素真正的值，数据可修改
 	el := reflect.TypeOf(ptr).Elem()
-
+	// 检查是否为切片
 	if el.Kind() == reflect.Slice {
+		// 对指针数据进行数据类型的转换
 		ptrMap, ok := ptr.(map[string][]string)
 		if !ok {
 			return ErrConvertMapStringSlice
 		}
+		// 遍历来设置值，将其转换为map
 		for k, v := range form {
 			ptrMap[k] = v
 		}
 
 		return nil
 	}
-
+	// 进行类型推断
 	ptrMap, ok := ptr.(map[string]string)
 	if !ok {
 		return ErrConvertToMapString
 	}
+	// 进行值的相关存贮
 	for k, v := range form {
 		ptrMap[k] = v[len(v)-1] // pick last
 	}

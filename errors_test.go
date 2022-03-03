@@ -15,7 +15,9 @@ import (
 
 func TestError(t *testing.T) {
 	baseError := errors.New("test error")
+	// 定义error
 	err := &Error{
+		// 这里使用baseError进行初始化
 		Err:  baseError,
 		Type: ErrorTypePrivate,
 	}

@@ -14,6 +14,7 @@ type Render interface {
 	WriteContentType(w http.ResponseWriter)
 }
 
+// 这里进行接口相关性校验
 var (
 	_ Render     = JSON{}
 	_ Render     = IndentedJSON{}
@@ -32,6 +33,7 @@ var (
 	_ Render     = ProtoBuf{}
 )
 
+// 写入上下文
 func writeContentType(w http.ResponseWriter, value []string) {
 	header := w.Header()
 	if val := header["Content-Type"]; len(val) == 0 {

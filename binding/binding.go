@@ -10,6 +10,7 @@ package binding
 import "net/http"
 
 // Content-Type MIME of the most common data formats.
+// http头部的相关数据信息
 const (
 	MIMEJSON              = "application/json"
 	MIMEHTML              = "text/html"
@@ -27,6 +28,7 @@ const (
 // Binding describes the interface which needs to be implemented for binding the
 // data present in the request such as JSON request body, query parameters or
 // the form POST.
+// binging相关操作
 type Binding interface {
 	Name() string
 	Bind(*http.Request, interface{}) error
@@ -50,6 +52,8 @@ type BindingUri interface {
 // order for it to be used as the validator engine for ensuring the correctness
 // of the request. Gin provides a default implementation for this using
 // https://github.com/go-playground/validator/tree/v10.6.1.
+// 默认结构转换指针
+// 对于默认的结构子转换，使用Validate进行相关参数的转换
 type StructValidator interface {
 	// ValidateStruct can receive any kind of type and it should never panic, even if the configuration is not right.
 	// If the received type is a slice|array, the validation should be performed travel on every element.
@@ -71,6 +75,8 @@ var Validator StructValidator = &defaultValidator{}
 
 // These implement the Binding interface and can be used to bind the data
 // present in the request to struct instances.
+// 定义各类数据参数校验器以及全局解析
+// 在这里进行各种全局binding策略注册器的全部注册
 var (
 	JSON          = jsonBinding{}
 	XML           = xmlBinding{}
@@ -87,6 +93,7 @@ var (
 
 // Default returns the appropriate Binding instance based on the HTTP method
 // and the content type.
+// 查询对应的content上下文
 func Default(method, contentType string) Binding {
 	if method == http.MethodGet {
 		return Form
@@ -110,6 +117,7 @@ func Default(method, contentType string) Binding {
 	}
 }
 
+// 将对象转换为结构体
 func validate(obj interface{}) error {
 	if Validator == nil {
 		return nil

@@ -19,6 +19,8 @@ func StringToBytes(s string) []byte {
 }
 
 // BytesToString converts byte slice to string without a memory allocation.
+// 将Bytes转换为string,这里直接使用指针进行转换，保证了高效性
+// 避免了二次内存分配带来的误差
 func BytesToString(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
 }

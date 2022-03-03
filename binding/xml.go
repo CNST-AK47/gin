@@ -12,7 +12,7 @@ import (
 )
 
 type xmlBinding struct{}
-
+// xml相关名称
 func (xmlBinding) Name() string {
 	return "xml"
 }

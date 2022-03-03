@@ -9,6 +9,7 @@ import (
 	"net/http"
 )
 
+// 默认内存大小 2^25
 const defaultMemory = 32 << 20
 
 type formBinding struct{}
@@ -19,6 +20,7 @@ func (formBinding) Name() string {
 	return "form"
 }
 
+// http绑定目标obj
 func (formBinding) Bind(req *http.Request, obj interface{}) error {
 	if err := req.ParseForm(); err != nil {
 		return err

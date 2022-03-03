@@ -12,6 +12,7 @@ type Data struct {
 	Data        []byte
 }
 
+// 数据写入渲染封装
 // Render (Data) writes data with custom ContentType.
 func (r Data) Render(w http.ResponseWriter) (err error) {
 	r.WriteContentType(w)

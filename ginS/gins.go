@@ -23,6 +23,7 @@ func engine() *gin.Engine {
 }
 
 // LoadHTMLGlob is a wrapper for Engine.LoadHTMLGlob.
+// 加载HTML全局
 func LoadHTMLGlob(pattern string) {
 	engine().LoadHTMLGlob(pattern)
 }

@@ -30,6 +30,7 @@ func (jsonBinding) Name() string {
 	return "json"
 }
 
+// 绑定对象
 func (jsonBinding) Bind(req *http.Request, obj interface{}) error {
 	if req == nil || req.Body == nil {
 		return errors.New("invalid request")
@@ -41,16 +42,22 @@ func (jsonBinding) BindBody(body []byte, obj interface{}) error {
 	return decodeJSON(bytes.NewReader(body), obj)
 }
 
+// json解析相关曹旭哦
 func decodeJSON(r io.Reader, obj interface{}) error {
+	// 创建json解码器
 	decoder := json.NewDecoder(r)
+	// 检查是否使用number
 	if EnableDecoderUseNumber {
 		decoder.UseNumber()
 	}
+	// 是否禁止无效字段
 	if EnableDecoderDisallowUnknownFields {
 		decoder.DisallowUnknownFields()
 	}
+	// 进行解码
 	if err := decoder.Decode(obj); err != nil {
 		return err
 	}
+	// 进行参数校验以及转换
 	return validate(obj)
 }

@@ -18,17 +18,24 @@ import (
 const BindKey = "_gin-gonic/gin/bindkey"
 
 // Bind is a helper function for given interface object and returns a Gin middleware.
+// 根据输入的interface对象，返回一个Gin中间件
+// 主要是用来进行中间件相关函数的处理
 func Bind(val interface{}) HandlerFunc {
+	// 获取当前值
 	value := reflect.ValueOf(val)
+	// 检查是否为指针对象
 	if value.Kind() == reflect.Ptr {
 		panic(`Bind struct can not be a pointer. Example:
 	Use: gin.Bind(Struct{}) instead of gin.Bind(&Struct{})
 `)
 	}
+	// 获取类型
 	typ := value.Type()
-
+	// 创建新的对象中间件具柄
 	return func(c *Context) {
+		// 创建反射对象
 		obj := reflect.New(typ).Interface()
+		// 进行对象初始化
 		if c.Bind(obj) == nil {
 			c.Set(BindKey, obj)
 		}
@@ -36,6 +43,7 @@ func Bind(val interface{}) HandlerFunc {
 }
 
 // WrapF is a helper function for wrapping http.HandlerFunc and returns a Gin middleware.
+// 将对应函数具柄封装成统一安全函数
 func WrapF(f http.HandlerFunc) HandlerFunc {
 	return func(c *Context) {
 		f(c.Writer, c.Request)
@@ -43,6 +51,7 @@ func WrapF(f http.HandlerFunc) HandlerFunc {
 }
 
 // WrapH is a helper function for wrapping http.Handler and returns a Gin middleware.
+// 将其封装为一个gin中间件
 func WrapH(h http.Handler) HandlerFunc {
 	return func(c *Context) {
 		h.ServeHTTP(c.Writer, c.Request)
@@ -136,6 +145,7 @@ func joinPaths(absolutePath, relativePath string) string {
 	return finalPath
 }
 
+// 解析地址
 func resolveAddress(addr []string) string {
 	switch len(addr) {
 	case 0:
