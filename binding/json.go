@@ -35,6 +35,7 @@ func (jsonBinding) Bind(req *http.Request, obj interface{}) error {
 	if req == nil || req.Body == nil {
 		return errors.New("invalid request")
 	}
+	// 进行json 解码
 	return decodeJSON(req.Body, obj)
 }
 
@@ -42,15 +43,18 @@ func (jsonBinding) BindBody(body []byte, obj interface{}) error {
 	return decodeJSON(bytes.NewReader(body), obj)
 }
 
-// json解析相关曹旭哦
+// json解析相关操作
 func decodeJSON(r io.Reader, obj interface{}) error {
 	// 创建json解码器
 	decoder := json.NewDecoder(r)
 	// 检查是否使用number
+	// 默认为false
+	// 设置为true时，会将number转换为float64
 	if EnableDecoderUseNumber {
 		decoder.UseNumber()
 	}
 	// 是否禁止无效字段
+	// 默认为false,当其为true时，会导致异常
 	if EnableDecoderDisallowUnknownFields {
 		decoder.DisallowUnknownFields()
 	}

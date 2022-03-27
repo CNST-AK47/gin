@@ -24,14 +24,19 @@ var (
 )
 
 // TrySet tries to set a value by the multipart request with the binding a form file
+
+// 多文件解析
 func (r *multipartRequest) TrySet(value reflect.Value, field reflect.StructField, key string, opt setOptions) (bool, error) {
+	// 如果存在文件对应反射字段为文件字段
 	if files := r.MultipartForm.File[key]; len(files) != 0 {
+		// 进行文件值设置
 		return setByMultipartFormFile(value, field, files)
 	}
-
+	// 进行参数解析
 	return setByForm(value, field, r.MultipartForm.Value, key, opt)
 }
 
+// 设置文件值
 func setByMultipartFormFile(value reflect.Value, field reflect.StructField, files []*multipart.FileHeader) (isSet bool, err error) {
 	switch value.Kind() {
 	case reflect.Ptr:

@@ -26,14 +26,17 @@ var (
 	ErrConvertToMapString = errors.New("can not convert to map of strings")
 )
 
+// 进行URI解析
 func mapURI(ptr interface{}, m map[string][]string) error {
 	return mapFormByTag(ptr, m, "uri")
 }
 
+// 进行from 解析
 func mapForm(ptr interface{}, form map[string][]string) error {
 	return mapFormByTag(ptr, form, "form")
 }
 
+// 对外统一接口
 func MapFormWithTag(ptr interface{}, form map[string][]string, tag string) error {
 	return mapFormByTag(ptr, form, tag)
 }
@@ -68,6 +71,7 @@ func mapFormByTag(ptr interface{}, form map[string][]string, tag string) error {
 }
 
 // setter tries to set value on a walking by fields of a struct
+// set 方法尝试通过反射，将值映射到指定Tag的struct 上
 type setter interface {
 	TrySet(value reflect.Value, field reflect.StructField, key string, opt setOptions) (isSet bool, err error)
 }
@@ -83,18 +87,29 @@ func (form formSource) TrySet(value reflect.Value, field reflect.StructField, ta
 
 // 进行数据映射
 func mappingByPtr(ptr interface{}, setter setter, tag string) error {
-	_, err := mapping(reflect.ValueOf(ptr), emptyField, setter, tag)
+	_, err := mapping(
+		reflect.ValueOf(ptr), // 绑定目标数据
+		emptyField,           // 空StructField 字段
+		setter,               // 对应的值映射方法
+		tag,                  // 标签
+	)
 	return err
 }
 
 // 进行字段映射
-func mapping(value reflect.Value, field reflect.StructField, setter setter, tag string) (bool, error) {
+func mapping(
+	value reflect.Value, // 反目标射值
+	field reflect.StructField, // 指定struct 字段
+	setter setter, // 对应的值映射方法
+	tag string, // 标签
+) (bool, error) {
 	if field.Tag.Get(tag) == "-" { // just ignoring this field
 		return false, nil
 	}
-	// 目标数据类型
+	// 目标数据的类型
 	vKind := value.Kind()
-	// 指针
+	// 指针，需要进行二次解析
+	// 构造出真实值
 	if vKind == reflect.Ptr {
 		var isNew bool
 		vPtr := value
@@ -115,9 +130,10 @@ func mapping(value reflect.Value, field reflect.StructField, setter setter, tag 
 		}
 		return isSet, nil
 	}
-	// 非结构体--常用数据类型
+	// 非结构体--常用数据类型 并且field 非禁止字段--私有变量字段
 	if vKind != reflect.Struct || !field.Anonymous {
-		// 正常进行解析
+		// 正常进行解析--这里值肯定为基础类型
+		// 将field 值设置到value上
 		ok, err := tryToSetValue(value, field, setter, tag)
 		if err != nil {
 			return false, err
@@ -128,12 +144,16 @@ func mapping(value reflect.Value, field reflect.StructField, setter setter, tag 
 	}
 	// 结构体
 	if vKind == reflect.Struct {
+		// 获取对应的反射类型
 		tValue := value.Type()
 
 		var isSet bool
 		// 遍历所有字段
+		// 进行递归解析
 		for i := 0; i < value.NumField(); i++ {
+			// 获取成员类型
 			sf := tValue.Field(i)
+			// 没有找到字段，继续解析
 			if sf.PkgPath != "" && !sf.Anonymous { // unexported
 				continue
 			}
@@ -149,57 +169,90 @@ func mapping(value reflect.Value, field reflect.StructField, setter setter, tag 
 	return false, nil
 }
 
+// 值的设置选项
+
 type setOptions struct {
 	isDefaultExists bool
 	defaultValue    string
 }
 
-func tryToSetValue(value reflect.Value, field reflect.StructField, setter setter, tag string) (bool, error) {
+// 尝试将值映射到指定的字段上
+func tryToSetValue(
+	value reflect.Value,
+	field reflect.StructField,
+	setter setter,
+	tag string,
+) (bool, error) {
+	// 值标签
 	var tagValue string
+	//设置选项
 	var setOpt setOptions
-	// 获取目标tag值
+	// 获取目标tag值，获取目标字段的Tage
 	tagValue = field.Tag.Get(tag)
-	// 查询所有的tag
+	// 查询所有的tag,及对应的值
 	tagValue, opts := head(tagValue, ",")
-
+	// 如果没有制定Tag 就设置为字段名称
 	if tagValue == "" { // default value is FieldName
 		tagValue = field.Name
 	}
+	// 如果还没有，就直接返回失败
 	if tagValue == "" { // when field is "emptyField" variable
 		return false, nil
 	}
 
+	// 进行参数选项设置
 	var opt string
+
 	for len(opts) > 0 {
 		// 进行分割
 		opt, opts = head(opts, ",")
-
+		// 对opt 进行k-v 分割
 		if k, v := head(opt, "="); k == "default" {
 			setOpt.isDefaultExists = true
 			setOpt.defaultValue = v
 		}
 	}
-
+	// 调用对应的setter,进行值和标签的绑定
 	return setter.TrySet(value, field, tagValue, setOpt)
 }
 
-// 设置数据by form
-func setByForm(value reflect.Value, field reflect.StructField, form map[string][]string, tagValue string, opt setOptions) (isSet bool, err error) {
+// 设置数据byform
+// 通过form 进行数据映射
+func setByForm(
+	value reflect.Value, // 目标反射value
+	field reflect.StructField, // 字段映射
+	form map[string][]string, // 表单数据
+	tagValue string, // 标签名称值
+	opt setOptions, // 标签选项
+) (isSet bool, err error) {
+	// 进行结构体校验
+
+	// 检查目标标签字段是否存在
 	vs, ok := form[tagValue]
+	// 不存在且，没有默认值
 	if !ok && !opt.isDefaultExists {
 		return false, nil
 	}
 
+	// 检查值类型，进行数据映射
 	switch value.Kind() {
+	// 切片处理
 	case reflect.Slice:
+		// 对应标签不存在
 		if !ok {
+			// 创建默认值
 			vs = []string{opt.defaultValue}
 		}
+		// 将默认值设置到目标value 中
 		return true, setSlice(vs, value, field)
+
+	// 数组处理
 	case reflect.Array:
+		// 这里可能存在bug???
 		if !ok {
 			vs = []string{opt.defaultValue}
 		}
+		// 检查数据量是否相同
 		if len(vs) != value.Len() {
 			return false, fmt.Errorf("%q is not valid value for %s", vs, value.Type().String())
 		}
@@ -213,10 +266,13 @@ func setByForm(value reflect.Value, field reflect.StructField, form map[string][
 		if len(vs) > 0 {
 			val = vs[0]
 		}
+		// 进行通用方法设置
 		return true, setWithProperType(val, value, field)
 	}
 }
 
+// 反射设置对应字段值
+// 将string 值，转换为对应的字段类型
 func setWithProperType(val string, value reflect.Value, field reflect.StructField) error {
 	switch value.Kind() {
 	case reflect.Int:
@@ -359,8 +415,11 @@ func setTimeField(val string, structField reflect.StructField, value reflect.Val
 	return nil
 }
 
+// 设置数组
 func setArray(vals []string, value reflect.Value, field reflect.StructField) error {
+	// 遍历数据
 	for i, s := range vals {
+		// 遍历进行数据值的设置
 		err := setWithProperType(s, value.Index(i), field)
 		if err != nil {
 			return err
@@ -369,12 +428,19 @@ func setArray(vals []string, value reflect.Value, field reflect.StructField) err
 	return nil
 }
 
-func setSlice(vals []string, value reflect.Value, field reflect.StructField) error {
+// 设置切片值
+func setSlice(
+	vals []string,
+	value reflect.Value,
+	field reflect.StructField,
+) error {
+	// 创建对应类型切片
 	slice := reflect.MakeSlice(value.Type(), len(vals), len(vals))
 	err := setArray(vals, slice, field)
 	if err != nil {
 		return err
 	}
+	// 更新设置值
 	value.Set(slice)
 	return nil
 }
@@ -397,7 +463,7 @@ func head(str, sep string) (head string, tail string) {
 	return str[:idx], str[idx+len(sep):]
 }
 
-// 将值映射到map上
+// 将from 映射到map
 func setFormMap(ptr interface{}, form map[string][]string) error {
 	// 反射获取元素真正的值，数据可修改
 	el := reflect.TypeOf(ptr).Elem()
@@ -415,7 +481,7 @@ func setFormMap(ptr interface{}, form map[string][]string) error {
 
 		return nil
 	}
-	// 进行类型推断
+	// 进行类型转换
 	ptrMap, ok := ptr.(map[string]string)
 	if !ok {
 		return ErrConvertToMapString

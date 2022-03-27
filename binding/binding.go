@@ -11,6 +11,7 @@ import "net/http"
 
 // Content-Type MIME of the most common data formats.
 // http头部的相关数据信息
+// 根据数据格式，进行数据解析
 const (
 	MIMEJSON              = "application/json"
 	MIMEHTML              = "text/html"
@@ -29,6 +30,7 @@ const (
 // data present in the request such as JSON request body, query parameters or
 // the form POST.
 // binging相关操作
+// 定义binding 操作接口
 type Binding interface {
 	Name() string
 	Bind(*http.Request, interface{}) error
@@ -36,7 +38,9 @@ type Binding interface {
 
 // BindingBody adds BindBody method to Binding. BindBody is similar with Bind,
 // but it reads the body from supplied bytes instead of req.Body.
-// binding 统一接口
+// bindingBody 统一接口
+// 会将上下文通过body进行存储
+// 会有一定的性能损耗
 type BindingBody interface {
 	Binding
 	BindBody([]byte, interface{}) error
@@ -67,6 +71,7 @@ type StructValidator interface {
 
 	// Engine returns the underlying validator engine which powers the
 	// StructValidator implementation.
+	// 返回继承接口的真实数据
 	Engine() interface{}
 }
 
@@ -80,7 +85,7 @@ var Validator StructValidator = &defaultValidator{}
 // 定义各类数据参数校验器以及全局解析
 // 在这里进行各种全局binding策略注册器的全部注册
 var (
-	JSON          = jsonBinding{}
+	JSON          = jsonBinding{} // json 关联器
 	XML           = xmlBinding{}
 	Form          = formBinding{}
 	Query         = queryBinding{}
@@ -124,5 +129,6 @@ func validate(obj interface{}) error {
 	if Validator == nil {
 		return nil
 	}
+	// 调用Validator方法
 	return Validator.ValidateStruct(obj)
 }

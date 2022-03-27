@@ -7,10 +7,14 @@ package render
 import "net/http"
 
 // Render interface is to be implemented by JSON, XML, HTML, YAML and so on.
+// 统一的数据渲染器接口，json、XML、HTML
+// 分别进行渲染封装
 type Render interface {
 	// Render writes data with custom ContentType.
+
 	Render(http.ResponseWriter) error
 	// WriteContentType writes custom ContentType.
+	// 进行写入数据类型
 	WriteContentType(w http.ResponseWriter)
 }
 
