@@ -46,7 +46,7 @@ const abortIndex int8 = math.MaxInt8 >> 1
 // Context is the most important part of gin. It allows us to pass variables between middleware,
 // manage the flow, validate the JSON of a request and render a JSON response for example.
 type Context struct {
-	writermem responseWriter
+	writermem responseWriter // 
 	Request   *http.Request
 	Writer    ResponseWriter
 
@@ -55,10 +55,11 @@ type Context struct {
 	index    int8
 	fullPath string
 
-	engine *Engine
-	params *Params
+	engine       *Engine
+	params       *Params
+	skippedNodes *[]skippedNode
 
-	// This mutex protect Keys map
+	// This mutex protects Keys map.
 	mu sync.RWMutex
 
 	// Keys is a key/value pair exclusively for the context of each request.
@@ -70,10 +71,10 @@ type Context struct {
 	// Accepted defines a list of manually accepted formats for content negotiation.
 	Accepted []string
 
-	// queryCache use url.ParseQuery cached the param query result from c.Request.URL.Query()
+	// queryCache caches the query result from c.Request.URL.Query().
 	queryCache url.Values
 
-	// formCache use url.ParseQuery cached PostForm contains the parsed form data from POST, PATCH,
+	// formCache caches c.Request.PostForm, which contains the parsed form data from POST, PATCH,
 	// or PUT body parameters.
 	formCache url.Values
 
@@ -99,6 +100,7 @@ func (c *Context) reset() {
 	c.queryCache = nil
 	c.formCache = nil
 	*c.params = (*c.params)[:0]
+	*c.skippedNodes = (*c.skippedNodes)[:0]
 }
 
 // Copy returns a copy of the current context that can be safely used outside the request's scope.
@@ -250,7 +252,7 @@ func (c *Context) Set(key string, value interface{}) {
 }
 
 // Get returns the value for the given key, ie: (value, true).
-// If the value does not exists it returns (nil, false)
+// If the value does not exist it returns (nil, false)
 func (c *Context) Get(key string) (value interface{}, exists bool) {
 	c.mu.RLock()
 	value, exists = c.Keys[key]
@@ -599,11 +601,10 @@ func (c *Context) SaveUploadedFile(file *multipart.FileHeader, dst string) error
 	return err
 }
 
-// Bind checks the Content-Type to select a binding engine automatically,
-// Depending the "Content-Type" header different bindings are used:
+// Bind checks the Method and Content-Type to select a binding engine automatically,
+// Depending on the "Content-Type" header different bindings are used, for example:
 //     "application/json" --> JSON binding
 //     "application/xml"  --> XML binding
-// otherwise --> returns an error.
 // It parses the request's body as JSON if Content-Type == "application/json" using JSON or XML as a JSON input.
 // It decodes the json payload into the struct specified as a pointer.
 // It writes a 400 error and sets Content-Type header "text/plain" in the response if input is not valid.
@@ -658,14 +659,13 @@ func (c *Context) MustBindWith(obj interface{}, b binding.Binding) error {
 	return nil
 }
 
-// ShouldBind checks the Content-Type to select a binding engine automatically,
-// Depending the "Content-Type" header different bindings are used:
+// ShouldBind checks the Method and Content-Type to select a binding engine automatically,
+// Depending on the "Content-Type" header different bindings are used, for example:
 //     "application/json" --> JSON binding
 //     "application/xml"  --> XML binding
-// otherwise --> returns an error
 // It parses the request's body as JSON if Content-Type == "application/json" using JSON or XML as a JSON input.
 // It decodes the json payload into the struct specified as a pointer.
-// Like c.Bind() but this method does not set the response status code to 400 and abort if the json is not valid.
+// Like c.Bind() but this method does not set the response status code to 400 or abort if input is not valid.
 func (c *Context) ShouldBind(obj interface{}) error {
 	b := binding.Default(c.Request.Method, c.ContentType())
 	return c.ShouldBindWith(obj, b)
@@ -733,20 +733,16 @@ func (c *Context) ShouldBindBodyWith(obj interface{}, bb binding.BindingBody) (e
 	return bb.BindBody(body, obj)
 }
 
-// ClientIP implements a best effort algorithm to return the real client IP.
+// ClientIP implements one best effort algorithm to return the real client IP.
 // It called c.RemoteIP() under the hood, to check if the remote IP is a trusted proxy or not.
 // If it is it will then try to parse the headers defined in Engine.RemoteIPHeaders (defaulting to [X-Forwarded-For, X-Real-Ip]).
 // If the headers are not syntactically valid OR the remote IP does not correspond to a trusted proxy,
-// the remote IP (coming form Request.RemoteAddr) is returned.
+// the remote IP (coming from Request.RemoteAddr) is returned.
 func (c *Context) ClientIP() string {
-	// Check if we're running on a trusted platform
-	switch c.engine.TrustedPlatform {
-	case PlatformGoogleAppEngine:
-		if addr := c.requestHeader("X-Appengine-Remote-Addr"); addr != "" {
-			return addr
-		}
-	case PlatformCloudflare:
-		if addr := c.requestHeader("CF-Connecting-IP"); addr != "" {
+	// Check if we're running on a trusted platform, continue running backwards if error
+	if c.engine.TrustedPlatform != "" {
+		// Developers can define their own header of Trusted Platform or use predefined constants
+		if addr := c.requestHeader(c.engine.TrustedPlatform); addr != "" {
 			return addr
 		}
 	}
@@ -759,14 +755,18 @@ func (c *Context) ClientIP() string {
 		}
 	}
 
-	remoteIP, trusted := c.RemoteIP()
+	// It also checks if the remoteIP is a trusted proxy or not.
+	// In order to perform this validation, it will see if the IP is contained within at least one of the CIDR blocks
+	// defined by Engine.SetTrustedProxies()
+	remoteIP := net.ParseIP(c.RemoteIP())
 	if remoteIP == nil {
 		return ""
 	}
+	trusted := c.engine.isTrustedProxy(remoteIP)
 
 	if trusted && c.engine.ForwardedByClientIP && c.engine.RemoteIPHeaders != nil {
 		for _, headerName := range c.engine.RemoteIPHeaders {
-			ip, valid := validateHeader(c.requestHeader(headerName))
+			ip, valid := c.engine.validateHeader(c.requestHeader(headerName))
 			if valid {
 				return ip
 			}
@@ -776,51 +776,12 @@ func (c *Context) ClientIP() string {
 }
 
 // RemoteIP parses the IP from Request.RemoteAddr, normalizes and returns the IP (without the port).
-// It also checks if the remoteIP is a trusted proxy or not.
-// In order to perform this validation, it will see if the IP is contained within at least one of the CIDR blocks
-// defined by Engine.SetTrustedProxies()
-func (c *Context) RemoteIP() (net.IP, bool) {
+func (c *Context) RemoteIP() string {
 	ip, _, err := net.SplitHostPort(strings.TrimSpace(c.Request.RemoteAddr))
 	if err != nil {
-		return nil, false
+		return ""
 	}
-	remoteIP := net.ParseIP(ip)
-	if remoteIP == nil {
-		return nil, false
-	}
-
-	if c.engine.trustedCIDRs != nil {
-		for _, cidr := range c.engine.trustedCIDRs {
-			if cidr.Contains(remoteIP) {
-				return remoteIP, true
-			}
-		}
-	}
-
-	return remoteIP, false
-}
-
-func validateHeader(header string) (clientIP string, valid bool) {
-	if header == "" {
-		return "", false
-	}
-	items := strings.Split(header, ",")
-	for i, ipStr := range items {
-		ipStr = strings.TrimSpace(ipStr)
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			return "", false
-		}
-
-		// We need to return the first IP in the list, but,
-		// we should not early return since we need to validate that
-		// the rest of the header is syntactically valid
-		if i == 0 {
-			clientIP = ipStr
-			valid = true
-		}
-	}
-	return
+	return ip
 }
 
 // ContentType returns the Content-Type header of the request.
@@ -864,7 +825,7 @@ func (c *Context) Status(code int) {
 	c.Writer.WriteHeader(code)
 }
 
-// Header is a intelligent shortcut for c.Writer.Header().Set(key, value).
+// Header is an intelligent shortcut for c.Writer.Header().Set(key, value).
 // It writes a header in the response.
 // If value == "", this method removes the header `c.Writer.Header().Del(key)`
 func (c *Context) Header(key, value string) {
@@ -880,7 +841,7 @@ func (c *Context) GetHeader(key string) string {
 	return c.requestHeader(key)
 }
 
-// GetRawData return stream data.
+// GetRawData returns stream data.
 func (c *Context) GetRawData() ([]byte, error) {
 	return ioutil.ReadAll(c.Request.Body)
 }
@@ -947,7 +908,7 @@ func (c *Context) HTML(code int, name string, obj interface{}) {
 
 // IndentedJSON serializes the given struct as pretty JSON (indented + endlines) into the response body.
 // It also sets the Content-Type as "application/json".
-// WARNING: we recommend to use this only for development purposes since printing pretty JSON is
+// WARNING: we recommend using this only for development purposes since printing pretty JSON is
 // more CPU and bandwidth consuming. Use Context.JSON() instead.
 func (c *Context) IndentedJSON(code int, obj interface{}) {
 	c.Render(code, render.IndentedJSON{Data: obj})
@@ -1011,7 +972,7 @@ func (c *Context) String(code int, format string, values ...interface{}) {
 	c.Render(code, render.String{Format: format, Data: values})
 }
 
-// Redirect returns a HTTP redirect to the specific location.
+// Redirect returns an HTTP redirect to the specific location.
 func (c *Context) Redirect(code int, location string) {
 	c.Render(-1, render.Redirect{
 		Code:     code,
@@ -1103,7 +1064,7 @@ type Negotiate struct {
 	Data     interface{}
 }
 
-// Negotiate calls different Render according acceptable Accept format.
+// Negotiate calls different Render according to acceptable Accept format.
 func (c *Context) Negotiate(code int, config Negotiate) {
 	switch c.NegotiateFormat(config.Offered...) {
 	case binding.MIMEJSON:

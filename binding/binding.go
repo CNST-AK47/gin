@@ -36,6 +36,7 @@ type Binding interface {
 
 // BindingBody adds BindBody method to Binding. BindBody is similar with Bind,
 // but it reads the body from supplied bytes instead of req.Body.
+// binding 统一接口
 type BindingBody interface {
 	Binding
 	BindBody([]byte, interface{}) error
@@ -43,6 +44,7 @@ type BindingBody interface {
 
 // BindingUri adds BindUri method to Binding. BindUri is similar with Bind,
 // but it read the Params.
+// 解析URL
 type BindingUri interface {
 	Name() string
 	BindUri(map[string][]string, interface{}) error
@@ -93,7 +95,7 @@ var (
 
 // Default returns the appropriate Binding instance based on the HTTP method
 // and the content type.
-// 查询对应的content上下文
+// 查询对应的content上下文,返回策略工厂
 func Default(method, contentType string) Binding {
 	if method == http.MethodGet {
 		return Form

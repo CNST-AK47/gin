@@ -52,9 +52,11 @@ func mapFormByTag(ptr interface{}, form map[string][]string, tag string) error {
 		pointed = ptrVal.Interface()
 	}
 	// 查询对应类型为map，就直接进行映射
+	// map[string]
 	if ptrVal.Kind() == reflect.Map &&
 		ptrVal.Type().Key().Kind() == reflect.String {
 		// 检查指针指向地址是否为空
+		// 进行再次解析
 		if pointed != nil {
 			ptr = pointed
 		}
@@ -79,36 +81,43 @@ func (form formSource) TrySet(value reflect.Value, field reflect.StructField, ta
 	return setByForm(value, field, form, tagValue, opt)
 }
 
+// 进行数据映射
 func mappingByPtr(ptr interface{}, setter setter, tag string) error {
 	_, err := mapping(reflect.ValueOf(ptr), emptyField, setter, tag)
 	return err
 }
 
+// 进行字段映射
 func mapping(value reflect.Value, field reflect.StructField, setter setter, tag string) (bool, error) {
 	if field.Tag.Get(tag) == "-" { // just ignoring this field
 		return false, nil
 	}
-
+	// 目标数据类型
 	vKind := value.Kind()
-
+	// 指针
 	if vKind == reflect.Ptr {
 		var isNew bool
 		vPtr := value
+		// 如果为空，
+		// 创建对应元素
 		if value.IsNil() {
 			isNew = true
 			vPtr = reflect.New(value.Type().Elem())
 		}
+		// 继续递归解析元素
 		isSet, err := mapping(vPtr.Elem(), field, setter, tag)
 		if err != nil {
 			return false, err
 		}
+		// 创建完元素后，继续进行操作
 		if isNew && isSet {
 			value.Set(vPtr)
 		}
 		return isSet, nil
 	}
-
+	// 非结构体--常用数据类型
 	if vKind != reflect.Struct || !field.Anonymous {
+		// 正常进行解析
 		ok, err := tryToSetValue(value, field, setter, tag)
 		if err != nil {
 			return false, err
@@ -117,16 +126,18 @@ func mapping(value reflect.Value, field reflect.StructField, setter setter, tag 
 			return true, nil
 		}
 	}
-
+	// 结构体
 	if vKind == reflect.Struct {
 		tValue := value.Type()
 
 		var isSet bool
+		// 遍历所有字段
 		for i := 0; i < value.NumField(); i++ {
 			sf := tValue.Field(i)
 			if sf.PkgPath != "" && !sf.Anonymous { // unexported
 				continue
 			}
+			// 进行递归解析
 			ok, err := mapping(value.Field(i), sf, setter, tag)
 			if err != nil {
 				return false, err
@@ -146,8 +157,9 @@ type setOptions struct {
 func tryToSetValue(value reflect.Value, field reflect.StructField, setter setter, tag string) (bool, error) {
 	var tagValue string
 	var setOpt setOptions
-
+	// 获取目标tag值
 	tagValue = field.Tag.Get(tag)
+	// 查询所有的tag
 	tagValue, opts := head(tagValue, ",")
 
 	if tagValue == "" { // default value is FieldName
@@ -159,6 +171,7 @@ func tryToSetValue(value reflect.Value, field reflect.StructField, setter setter
 
 	var opt string
 	for len(opts) > 0 {
+		// 进行分割
 		opt, opts = head(opts, ",")
 
 		if k, v := head(opt, "="); k == "default" {
@@ -170,6 +183,7 @@ func tryToSetValue(value reflect.Value, field reflect.StructField, setter setter
 	return setter.TrySet(value, field, tagValue, setOpt)
 }
 
+// 设置数据by form
 func setByForm(value reflect.Value, field reflect.StructField, form map[string][]string, tagValue string, opt setOptions) (isSet bool, err error) {
 	vs, ok := form[tagValue]
 	if !ok && !opt.isDefaultExists {
@@ -374,6 +388,7 @@ func setTimeDuration(val string, value reflect.Value) error {
 	return nil
 }
 
+// 进行头部分割匹配
 func head(str, sep string) (head string, tail string) {
 	idx := strings.Index(str, sep)
 	if idx < 0 {
@@ -407,7 +422,7 @@ func setFormMap(ptr interface{}, form map[string][]string) error {
 	}
 	// 进行值的相关存贮
 	for k, v := range form {
-		ptrMap[k] = v[len(v)-1] // pick last
+		ptrMap[k] = v[len(v)-1] // pick last,选取最后一个值进行存储
 	}
 
 	return nil

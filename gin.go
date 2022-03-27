@@ -11,12 +11,13 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"reflect"
 	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin/internal/bytesconv"
 	"github.com/gin-gonic/gin/render"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 const defaultMultipartMemory = 32 << 20 // 32 MB
@@ -28,15 +29,24 @@ var (
 
 var defaultPlatform string
 
-var defaultTrustedCIDRs = []*net.IPNet{{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}}} // 0.0.0.0/0
+var defaultTrustedCIDRs = []*net.IPNet{
+	{ // 0.0.0.0/0 (IPv4)
+		IP:   net.IP{0x0, 0x0, 0x0, 0x0},
+		Mask: net.IPMask{0x0, 0x0, 0x0, 0x0},
+	},
+	{ // ::/0 (IPv6)
+		IP:   net.IP{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+		Mask: net.IPMask{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+	},
+}
 
 // HandlerFunc defines the handler used by gin middleware as return value.
 type HandlerFunc func(*Context)
 
-// HandlersChain defines a HandlerFunc array.
+// HandlersChain defines a HandlerFunc slice.
 type HandlersChain []HandlerFunc
 
-// Last returns the last handler in the chain. ie. the last handler is the main one.
+// Last returns the last handler in the chain. i.e. the last handler is the main one.
 func (c HandlersChain) Last() HandlerFunc {
 	if length := len(c); length > 0 {
 		return c[length-1]
@@ -52,17 +62,17 @@ type RouteInfo struct {
 	HandlerFunc HandlerFunc
 }
 
-// RoutesInfo defines a RouteInfo array.
+// RoutesInfo defines a RouteInfo slice.
 type RoutesInfo []RouteInfo
 
 // Trusted platforms
 const (
 	// When running on Google App Engine. Trust X-Appengine-Remote-Addr
 	// for determining the client's IP
-	PlatformGoogleAppEngine = "google-app-engine"
+	PlatformGoogleAppEngine = "X-Appengine-Remote-Addr"
 	// When using Cloudflare's CDN. Trust CF-Connecting-IP for determining
 	// the client's IP
-	PlatformCloudflare = "cloudflare"
+	PlatformCloudflare = "CF-Connecting-IP"
 )
 
 // Engine is the framework's instance, it contains the muxer, middleware and configuration settings.
@@ -102,7 +112,7 @@ type Engine struct {
 	// `(*gin.Context).Request.RemoteAddr`.
 	ForwardedByClientIP bool
 
-	// DEPRECATED: USE `TrustedPlatform` WITH VALUE `gin.GoogleAppEngine` INSTEAD
+	// DEPRECATED: USE `TrustedPlatform` WITH VALUE `gin.PlatformGoogleAppEngine` INSTEAD
 	// #726 #755 If enabled, it will trust some headers starting with
 	// 'X-AppEngine...' for better integration with that PaaS.
 	AppEngine bool
@@ -133,6 +143,9 @@ type Engine struct {
 	// method call.
 	MaxMultipartMemory int64
 
+	// Enable h2c support.
+	UseH2C bool
+
 	delims           render.Delims
 	secureJSONPrefix string
 	HTMLRender       render.HTMLRender
@@ -144,6 +157,7 @@ type Engine struct {
 	pool             sync.Pool
 	trees            methodTrees
 	maxParams        uint16
+	maxSections      uint16
 	trustedProxies   []string
 	trustedCIDRs     []*net.IPNet
 }
@@ -151,7 +165,7 @@ type Engine struct {
 var _ IRouter = &Engine{}
 
 // New returns a new blank Engine instance without any middleware attached.
-// By default the configuration is:
+// By default, the configuration is:
 // - RedirectTrailingSlash:  true
 // - RedirectFixedPath:      false
 // - HandleMethodNotAllowed: false
@@ -198,12 +212,22 @@ func Default() *Engine {
 	return engine
 }
 
-func (engine *Engine) allocateContext() *Context {
-	v := make(Params, 0, engine.maxParams)
-	return &Context{engine: engine, params: &v}
+func (engine *Engine) Handler() http.Handler {
+	if !engine.UseH2C {
+		return engine
+	}
+
+	h2s := &http2.Server{}
+	return h2c.NewHandler(engine, h2s)
 }
 
-// Delims sets template left and right delims and returns a Engine instance.
+func (engine *Engine) allocateContext() *Context {
+	v := make(Params, 0, engine.maxParams)
+	skippedNodes := make([]skippedNode, 0, engine.maxSections)
+	return &Context{engine: engine, params: &v, skippedNodes: &skippedNodes}
+}
+
+// Delims sets template left and right delims and returns an Engine instance.
 func (engine *Engine) Delims(left, right string) *Engine {
 	engine.delims = render.Delims{Left: left, Right: right}
 	return engine
@@ -257,7 +281,7 @@ func (engine *Engine) SetFuncMap(funcMap template.FuncMap) {
 	engine.FuncMap = funcMap
 }
 
-// NoRoute adds handlers for NoRoute. It return a 404 code by default.
+// NoRoute adds handlers for NoRoute. It returns a 404 code by default.
 func (engine *Engine) NoRoute(handlers ...HandlerFunc) {
 	engine.noRoute = handlers
 	engine.rebuild404Handlers()
@@ -269,7 +293,7 @@ func (engine *Engine) NoMethod(handlers ...HandlerFunc) {
 	engine.rebuild405Handlers()
 }
 
-// Use attaches a global middleware to the router. ie. the middleware attached though Use() will be
+// Use attaches a global middleware to the router. i.e. the middleware attached through Use() will be
 // included in the handlers chain for every single request. Even 404, 405, static files...
 // For example, this is the right place for a logger or error management middleware.
 func (engine *Engine) Use(middleware ...HandlerFunc) IRoutes {
@@ -305,6 +329,10 @@ func (engine *Engine) addRoute(method, path string, handlers HandlersChain) {
 	// Update maxParams
 	if paramsCount := countParams(path); paramsCount > engine.maxParams {
 		engine.maxParams = paramsCount
+	}
+
+	if sectionsCount := countSections(path); sectionsCount > engine.maxSections {
+		engine.maxSections = sectionsCount
 	}
 }
 
@@ -347,7 +375,7 @@ func (engine *Engine) Run(addr ...string) (err error) {
 
 	address := resolveAddress(addr)
 	debugPrint("Listening and serving HTTP on %s\n", address)
-	err = http.ListenAndServe(address, engine)
+	err = http.ListenAndServe(address, engine.Handler())
 	return
 }
 
@@ -393,9 +421,9 @@ func (engine *Engine) SetTrustedProxies(trustedProxies []string) error {
 	return engine.parseTrustedProxies()
 }
 
-// isUnsafeTrustedProxies compares Engine.trustedCIDRs and defaultTrustedCIDRs, it's not safe if equal (returns true)
+// isUnsafeTrustedProxies checks if Engine.trustedCIDRs contains all IPs, it's not safe if it has (returns true)
 func (engine *Engine) isUnsafeTrustedProxies() bool {
-	return reflect.DeepEqual(engine.trustedCIDRs, defaultTrustedCIDRs)
+	return engine.isTrustedProxy(net.ParseIP("0.0.0.0")) || engine.isTrustedProxy(net.ParseIP("::"))
 }
 
 // parseTrustedProxies parse Engine.trustedProxies to Engine.trustedCIDRs
@@ -403,6 +431,41 @@ func (engine *Engine) parseTrustedProxies() error {
 	trustedCIDRs, err := engine.prepareTrustedCIDRs()
 	engine.trustedCIDRs = trustedCIDRs
 	return err
+}
+
+// isTrustedProxy will check whether the IP address is included in the trusted list according to Engine.trustedCIDRs
+func (engine *Engine) isTrustedProxy(ip net.IP) bool {
+	if engine.trustedCIDRs == nil {
+		return false
+	}
+	for _, cidr := range engine.trustedCIDRs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateHeader will parse X-Forwarded-For header and return the trusted client IP address
+func (engine *Engine) validateHeader(header string) (clientIP string, valid bool) {
+	if header == "" {
+		return "", false
+	}
+	items := strings.Split(header, ",")
+	for i := len(items) - 1; i >= 0; i-- {
+		ipStr := strings.TrimSpace(items[i])
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			break
+		}
+
+		// X-Forwarded-For is appended by proxy
+		// Check IPs in reverse order and stop when find untrusted proxy
+		if (i == 0) || (!engine.isTrustedProxy(ip)) {
+			return ipStr, true
+		}
+	}
+	return "", false
 }
 
 // parseIP parse a string representation of an IP and returns a net.IP with the
@@ -431,12 +494,12 @@ func (engine *Engine) RunTLS(addr, certFile, keyFile string) (err error) {
 			"Please check https://pkg.go.dev/github.com/gin-gonic/gin#readme-don-t-trust-all-proxies for details.")
 	}
 
-	err = http.ListenAndServeTLS(addr, certFile, keyFile, engine)
+	err = http.ListenAndServeTLS(addr, certFile, keyFile, engine.Handler())
 	return
 }
 
 // RunUnix attaches the router to a http.Server and starts listening and serving HTTP requests
-// through the specified unix socket (ie. a file).
+// through the specified unix socket (i.e. a file).
 // Note: this method will block the calling goroutine indefinitely unless an error happens.
 func (engine *Engine) RunUnix(file string) (err error) {
 	debugPrint("Listening and serving HTTP on unix:/%s", file)
@@ -454,7 +517,7 @@ func (engine *Engine) RunUnix(file string) (err error) {
 	defer listener.Close()
 	defer os.Remove(file)
 
-	err = http.Serve(listener, engine)
+	err = http.Serve(listener, engine.Handler())
 	return
 }
 
@@ -491,7 +554,7 @@ func (engine *Engine) RunListener(listener net.Listener) (err error) {
 			"Please check https://pkg.go.dev/github.com/gin-gonic/gin#readme-don-t-trust-all-proxies for details.")
 	}
 
-	err = http.Serve(listener, engine)
+	err = http.Serve(listener, engine.Handler())
 	return
 }
 
@@ -507,9 +570,9 @@ func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	engine.pool.Put(c)
 }
 
-// HandleContext re-enter a context that has been rewritten.
+// HandleContext re-enters a context that has been rewritten.
 // This can be done by setting c.Request.URL.Path to your new target.
-// Disclaimer: You can loop yourself to death with this, use wisely.
+// Disclaimer: You can loop yourself to deal with this, use wisely.
 func (engine *Engine) HandleContext(c *Context) {
 	oldIndexValue := c.index
 	c.reset()
@@ -539,7 +602,7 @@ func (engine *Engine) handleHTTPRequest(c *Context) {
 		}
 		root := t[i].root
 		// Find route in tree
-		value := root.getValue(rPath, c.params, unescape)
+		value := root.getValue(rPath, c.params, c.skippedNodes, unescape)
 		if value.params != nil {
 			c.Params = *value.params
 		}
@@ -567,7 +630,7 @@ func (engine *Engine) handleHTTPRequest(c *Context) {
 			if tree.method == httpMethod {
 				continue
 			}
-			if value := tree.root.getValue(rPath, nil, unescape); value.handlers != nil {
+			if value := tree.root.getValue(rPath, nil, c.skippedNodes, unescape); value.handlers != nil {
 				c.handlers = engine.allNoMethod
 				serveError(c, http.StatusMethodNotAllowed, default405Body)
 				return

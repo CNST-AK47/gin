@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1404,6 +1405,11 @@ func TestContextClientIP(t *testing.T) {
 	// Tests exercising the TrustedProxies functionality
 	resetContextForClientIPTests(c)
 
+	// IPv6 support
+	c.Request.RemoteAddr = "[::1]:12345"
+	assert.Equal(t, "20.20.20.20", c.ClientIP())
+
+	resetContextForClientIPTests(c)
 	// No trusted proxies
 	_ = c.engine.SetTrustedProxies([]string{})
 	c.engine.RemoteIPHeaders = []string{"X-Forwarded-For"}
@@ -1419,7 +1425,7 @@ func TestContextClientIP(t *testing.T) {
 
 	// Only trust RemoteAddr
 	_ = c.engine.SetTrustedProxies([]string{"40.40.40.40"})
-	assert.Equal(t, "20.20.20.20", c.ClientIP())
+	assert.Equal(t, "30.30.30.30", c.ClientIP())
 
 	// All steps are trusted
 	_ = c.engine.SetTrustedProxies([]string{"40.40.40.40", "30.30.30.30", "20.20.20.20"})
@@ -1458,8 +1464,20 @@ func TestContextClientIP(t *testing.T) {
 	c.engine.TrustedPlatform = PlatformGoogleAppEngine
 	assert.Equal(t, "50.50.50.50", c.ClientIP())
 
-	// Test the legacy flag
+	// Use custom TrustedPlatform header
+	c.engine.TrustedPlatform = "X-CDN-IP"
+	c.Request.Header.Set("X-CDN-IP", "80.80.80.80")
+	assert.Equal(t, "80.80.80.80", c.ClientIP())
+	// wrong header
+	c.engine.TrustedPlatform = "X-Wrong-Header"
+	assert.Equal(t, "40.40.40.40", c.ClientIP())
+
+	c.Request.Header.Del("X-CDN-IP")
+	// TrustedPlatform is empty
 	c.engine.TrustedPlatform = ""
+	assert.Equal(t, "40.40.40.40", c.ClientIP())
+
+	// Test the legacy flag
 	c.engine.AppEngine = true
 	assert.Equal(t, "50.50.50.50", c.ClientIP())
 	c.engine.AppEngine = false
@@ -1488,6 +1506,7 @@ func resetContextForClientIPTests(c *Context) {
 	c.Request.Header.Set("CF-Connecting-IP", "60.60.60.60")
 	c.Request.RemoteAddr = "  40.40.40.40:42123 "
 	c.engine.TrustedPlatform = ""
+	c.engine.trustedCIDRs = defaultTrustedCIDRs
 	c.engine.AppEngine = false
 }
 
@@ -2017,8 +2036,8 @@ func TestRaceParamsContextCopy(t *testing.T) {
 			}(c.Copy(), c.Param("name"))
 		})
 	}
-	performRequest(router, "GET", "/name1/api")
-	performRequest(router, "GET", "/name2/api")
+	PerformRequest(router, "GET", "/name1/api")
+	PerformRequest(router, "GET", "/name2/api")
 	wg.Wait()
 }
 
@@ -2039,7 +2058,8 @@ func TestRemoteIPFail(t *testing.T) {
 	c, _ := CreateTestContext(httptest.NewRecorder())
 	c.Request, _ = http.NewRequest("POST", "/", nil)
 	c.Request.RemoteAddr = "[:::]:80"
-	ip, trust := c.RemoteIP()
+	ip := net.ParseIP(c.RemoteIP())
+	trust := c.engine.isTrustedProxy(ip)
 	assert.Nil(t, ip)
 	assert.False(t, trust)
 }
